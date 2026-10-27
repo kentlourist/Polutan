@@ -1,6 +1,7 @@
 import { BAKU_MUTU_UDARA as BMU, BAKU_MUTU_AIRTANAH as BMG, SKENARIO_UDARA as SU, SKENARIO_TANAH as ST, BASEMAPS, elevUdara } from './config.js';
 import { solveAir, solveGW, sampleGrid, luasPopulasi, evaluasi, sigma } from './engine.js';
 import { Scene3D, heat, ticks, xyChart, ramp as vramp, mix } from './views.js';
+import { initUI } from './ui.js';
 
 const $ = (s) => document.querySelector(s);
 const fmt = (x, d = 1) => (x >= 1000 ? x.toFixed(0) : x >= 10 ? x.toFixed(d) : x >= 0.1 ? x.toFixed(2) : x.toPrecision(2));
@@ -10,11 +11,21 @@ const boundsOf = (c, half) => [toLL(c, -half, -half), toLL(c, half, half)];
 
 // ---------- Peta: Leaflet + Google Street Map / Satelit ----------
 const map = L.map('map', { preferCanvas: true }).setView(SU.pusat, 12);
-const bases = {};
-for (const [k, v] of Object.entries(BASEMAPS)) bases[k] = L.tileLayer(v.url, { subdomains: v.sub, attribution: v.attr, maxZoom: 20 });
-bases['Google Street Map'].addTo(map);
+const bases = {}, tstat = {};
+let curBase = 'Google Street Map', ui = null, mode = 'air';
+for (const [k, v] of Object.entries(BASEMAPS)) {
+  const t = bases[k] = L.tileLayer(v.url, { subdomains: v.sub, attribution: v.attr, maxZoom: 20 }); tstat[k] = { ok: 0, err: 0 };
+  t.on('tileload', () => { tstat[k].ok++; });
+  // Bila tile Google gagal dimuat (diblokir jaringan / dibatasi Google), otomatis pindah ke OpenStreetMap agar peta tidak kosong.
+  t.on('tileerror', () => { if (curBase === k && ++tstat[k].err >= 3 && !tstat[k].ok && k.startsWith('Google')) { setBase('OpenStreetMap'); ui?.toast('Tile Google tidak dapat dimuat — beralih ke OpenStreetMap', 6000); } });
+}
+function setBase(n) {
+  if (!bases[n]) return;
+  if (map.hasLayer(bases[curBase])) map.removeLayer(bases[curBase]);
+  curBase = n; bases[n].addTo(map); ui?.refreshBaseUI();
+}
+bases[curBase].addTo(map);
 L.control.scale({ imperial: false }).addTo(map);
-let layerCtl, mode = 'air';
 const legend = L.control({ position: 'bottomright' });
 legend.onAdd = () => { const d = L.DomUtil.create('div', 'legend'); legend._d = d; return d; };
 legend.addTo(map);
@@ -164,14 +175,14 @@ function drawChart() {
 // =====================================================================
 // Kontrol, tab, interaksi
 // =====================================================================
-function buildControl() {
-  if (layerCtl) map.removeControl(layerCtl);
+const overlays = () => {
   const ov = mode === 'air'
     ? { 'Sebaran polutan udara': airLayers.overlay, 'Relief DEM (demo)': airLayers.relief, 'Sumber emisi': airLayers.sumber, 'Titik sampling': airLayers.titik, 'Permukiman (sintetis)': airLayers.perm, 'Arah angin': airLayers.angin, 'Batas domain': airLayers.domain }
     : { 'Sebaran kontaminan air tanah': gwLayers.overlay, 'Sumber kontaminan': gwLayers.sumber, 'Sumur pantau': gwLayers.titik, 'Batas domain': gwLayers.domain };
   for (const k of Object.keys(ov)) if (!ov[k]) delete ov[k];
-  layerCtl = L.control.layers(bases, ov, { collapsed: true }).addTo(map);
-}
+  return ov;
+};
+function buildControl() { ui?.renderLayers(); }
 function setMode(m) {
   mode = m; stopAll();
   const groups = [airLayers.relief, airLayers.overlay, airLayers.sumber, airLayers.titik, airLayers.perm, airLayers.angin, airLayers.domain, gwLayers.overlay, gwLayers.sumber, gwLayers.titik, gwLayers.domain];
@@ -221,6 +232,7 @@ $('#g-play').onclick = () => {
 // Animasi 24 jam: meteorologi sintetis harian (stabilitas, angin, arah berubah)
 let animTimer = null;
 const STAB = 'FFFFFEDCBBAAABBCCDEEFFFF'.split('');
+$('#a-run').onclick = runAir;
 $('#a-anim').onclick = () => {
   if (animTimer) return stopAll();
   let h = 0; $('#a-anim').textContent = 'Berhenti';
@@ -233,6 +245,7 @@ $('#a-anim').onclick = () => {
 function stopAll() { clearInterval(playTimer); clearInterval(animTimer); playTimer = animTimer = null; $('#g-play').textContent = 'Putar'; $('#a-anim').textContent = 'Animasi 24 jam'; }
 
 map.on('click', (e) => {
+  if (ui && ui.tool() !== 'identify') return;       // alat ukur aktif: jangan buka popup nilai
   const [E, N] = toEN(mode === 'air' ? SU.pusat : ST.pusat, e.latlng); let html = '';
   if (mode === 'air' && airRes) { const v = sampleGrid(airRes, E, N); if (!isNaN(v)) html = `<b>${BMU[A.pol].label}</b>: ${fmt(v)} µg/m³<br>Baku mutu ${BMU[A.pol].bm} → <b class="${v > BMU[A.pol].bm ? 'bad' : 'ok'}">${v > BMU[A.pol].bm ? 'Melebihi' : 'Memenuhi'}</b>`; }
   if (mode === 'gw' && gwRes) { const h = ST.luasM / 2, i = Math.floor((E + h) / gwRes.dx), j = Math.floor((h - N) / gwRes.dx);
@@ -250,7 +263,7 @@ const css = (c) => `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`, clamp = (v, a, b)
 const nearest = (snaps, t) => snaps.reduce((b, s, k) => Math.abs(s.t - t) < Math.abs(snaps[b].t - t) ? k : b, 0);
 document.querySelectorAll('.viewbar button').forEach((b) => { b.onclick = () => setView(b.dataset.v); });
 function setView(v) {
-  view = v;
+  view = v; document.querySelector('.mapwrap').dataset.view = v;
   document.querySelectorAll('.viewbar button').forEach((b) => b.classList.toggle('on', b.dataset.v === v));
   $('#v3d').hidden = v !== '3d'; $('#sec').hidden = v !== 'sec'; $('#hud').style.display = v === 'map' ? '' : 'none';
   if (v === 'map') map.invalidateSize(); refreshView();
@@ -368,4 +381,47 @@ function gwSections() {
   xyChart($('#s-prof'), [{ color: '#1f6feb', pts }], { xmax: c.c0 * 1.05, ymax: depth, down: true, xlab: `${c.label} (${c.unit})`, ylab: 'Kedalaman (m)', refX: c.bm });
   $('#cap-prof').textContent = `Profil vertikal di x = ${GP.x} m`;
 }
+
+// =====================================================================
+// Hubungan ke antarmuka WebGIS (menu, toolbar, panel)
+// =====================================================================
+const zoomDomain = () => map.fitBounds(mode === 'air' ? boundsOf(SU.pusat, half) : boundsOf(ST.pusat, ST.luasM / 2));
+const zoomSource = () => (mode === 'air' ? map.setView(toLL(SU.pusat, SU.sumber[0].e, SU.sumber[0].n), 14) : map.setView(toLL(ST.pusat, ST.sumber.e, ST.sumber.n), 15));
+const DEF = [...document.querySelectorAll('#panel-air [id], #panel-gw [id]')].filter((e) => /^(INPUT|SELECT)$/.test(e.tagName) && e.id !== 'g-t').map((e) => [e, e.type === 'checkbox' ? e.checked : e.value]);
+function resetParams() {
+  stopAll(); const root = $(mode === 'air' ? '#panel-air' : '#panel-gw');
+  for (const [e, v] of DEF) {
+    if (!root.contains(e)) continue;
+    const cur = e.type === 'checkbox' ? e.checked : e.value; if (cur === v) continue;
+    e.type === 'checkbox' ? (e.checked = v) : (e.value = v);
+    e.dispatchEvent(new Event(e.type === 'range' ? 'input' : 'change'));
+  }
+  mode === 'gw' ? runGW() : runAir(); ui.toast('Parameter dikembalikan ke nilai awal');
+}
+function geojson() {
+  const F = [], pt = (c, e, n, props) => { const [la, lo] = toLL(c, e, n); F.push({ type: 'Feature', properties: props, geometry: { type: 'Point', coordinates: [lo, la] } }); };
+  const rect = (c, e0, n0, w, h, props) => { const a = toLL(c, e0 - w / 2, n0 - h / 2), b = toLL(c, e0 + w / 2, n0 + h / 2); F.push({ type: 'Feature', properties: props, geometry: { type: 'Polygon', coordinates: [[[a[1], a[0]], [b[1], a[0]], [b[1], b[0]], [a[1], b[0]], [a[1], a[0]]]] } }); };
+  if (mode === 'air') {
+    SU.sumber.forEach((s) => pt(SU.pusat, s.e, s.n, { jenis: 'sumber emisi', nama: s.nama, tinggi_m: s.H }));
+    SU.sampling.forEach((s) => pt(SU.pusat, s.e, s.n, { jenis: 'titik sampling', nama: s.nama }));
+    SU.permukiman.forEach((p) => pt(SU.pusat, p.e, p.n, { jenis: 'permukiman (sintetis)', nama: p.nama, populasi: p.pop, sigma_m: p.s }));
+    rect(SU.pusat, 0, 0, half * 2, half * 2, { jenis: 'batas domain' });
+  } else {
+    rect(ST.pusat, ST.sumber.e, ST.sumber.n, ST.sumber.lebar, ST.sumber.panjang, { jenis: 'sumber kontaminan' });
+    ST.sumur.forEach((s) => pt(ST.pusat, s.e, s.n, { jenis: 'sumur pantau', nama: s.nama }));
+    rect(ST.pusat, 0, 0, ST.luasM, ST.luasM, { jenis: 'batas domain' });
+  }
+  return { type: 'FeatureCollection', features: F };
+}
+ui = initUI({
+  map, bases, getBase: () => curBase, setBase, overlays, getMode: () => mode, setMode, getView: () => view, setView,
+  run: () => (mode === 'air' ? runAir() : runGW()),
+  toggleAnim: () => (mode === 'air' ? $('#a-anim').click() : gwRes && $('#g-play').click()),
+  zoomDomain, zoomSource, resetParams, geojson,
+  toEN: (ll) => toEN(mode === 'air' ? SU.pusat : ST.pusat, ll),
+  gwSeriesNames: () => ST.sumur.map((s) => s.nama),
+  gwSeries: () => (gwRes ? gwRes.snaps.map((s, k) => [s.t.toFixed(1), ...gwRes.series.map((sr) => sr[k])]) : []),
+  onTab: (t) => { if (t === 'hasil' && mode === 'gw') drawChart(); },
+  onResize: () => { gwRes && drawChart(); refreshView(); },
+});
 setMode('air');

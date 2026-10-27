@@ -5,6 +5,11 @@ dievaluasi terhadap baku mutu **PP No. 22/2021**, divisualisasikan interaktif di
 **Google Street Map / Satelit / Terrain**, OpenStreetMap, dan Esri. Seluruh data bersifat **sintetis**.
 Tanpa server: semua perhitungan berjalan di browser.
 
+Antarmuka bergaya **WebGIS profesional**: menu bar (Berkas, Tampilan, Peta Dasar, Layer, Analisis, Alat, Bantuan) dengan sub menu, toolbar (zoom ke domain, identifikasi, ukur jarak/luas, jalankan simulasi, pilih peta dasar, cari koordinat, ekspor CSV/GeoJSON, cetak, layar penuh), panel samping bertab (Parameter / Hasil / Layer), dan status bar koordinat.
+
+## Struktur berkas
+`index.html` (kerangka) · `css/style.css` (tampilan) · `js/app.js` (peta & model) · `js/ui.js` (menu, toolbar, alat ukur) · `js/engine.js`, `js/views.js`, `js/config.js` · `vendor/leaflet/` (Leaflet 1.9.4 lokal, tanpa CDN).
+
 ## Menjalankan di GitHub
 1. Buat repositori, unggah seluruh isi folder ini ke branch `main`.
 2. **Settings → Pages → Source: GitHub Actions**.
@@ -29,6 +34,7 @@ Uji solver: `node tests/verify.mjs`.
 Edit `js/config.js`: koordinat pusat, sumber emisi (H, d, vs, Ts, Q), permukiman, titik sampling, parameter akuifer, baku mutu.
 
 ## Catatan penting
+- **Peta tidak tampil (diperbaiki)**: panel `#sec` (Profil & penampang) memakai `display:grid` berspesifisitas ID sehingga menimpa atribut `hidden` dan menutupi peta. Sekarang `[hidden]{display:none!important}` berlaku global. Leaflet juga disertakan lokal di `vendor/` dan, bila tile Google gagal dimuat, aplikasi otomatis beralih ke OpenStreetMap.
 - **Baku mutu**: nilai udara dari PP 22/2021 Lampiran VII; **verifikasi ulang** terhadap salinan resmi. Baku mutu air tanah di `BAKU_MUTU_AIRTANAH` hanyalah **placeholder**.
 - **Tile Google** diakses langsung tanpa API key dan tidak sesuai ketentuan layanan Google untuk penggunaan produksi/publik. Untuk publikasi, pakai Google Maps JavaScript API (dengan key) atau basemap OSM/Esri.
 - **Topografi**: tile Google Terrain hanya gambar peta berarsir, bukan data elevasi, jadi nilai ketinggiannya tidak bisa dibaca program. Karena itu efek topografi memakai DEM demo sintetis (`elevUdara` di `js/config.js`); Google Terrain tetap tersedia sebagai basemap visual. Untuk DEM nyata, ganti fungsi itu dengan pembacaan raster hasil ekspor GEE (SRTM/Copernicus) atau tile elevasi terbuka.
